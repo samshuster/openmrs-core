@@ -376,66 +376,89 @@ public class HibernateEncounterDAO implements EncounterDAO {
 		
 		criteria = criteria.createCriteria("patient", "pat");
 		if (patientId != null) {
-			criteria.add(Restrictions.eq("pat.patientId", patientId));
-			if (StringUtils.isNotBlank(query)) {
-				criteria.setResultTransformer(Criteria.DISTINCT_ROOT_ENTITY);
-				//match on location.name, encounterType.name, form.name
-				//provider.name, provider.identifier, provider.person.names
-				MatchMode mode = MatchMode.ANYWHERE;
-				criteria.createAlias("enc.location", "loc");
-				criteria.createAlias("enc.encounterType", "encType");
-				criteria.createAlias("enc.form", "form");
-				criteria.createAlias("enc.encounterProviders", "enc_prov");
-				criteria.createAlias("enc_prov.provider", "prov");
-				criteria.createAlias("prov.person", "person", Criteria.LEFT_JOIN);
-				criteria.createAlias("person.names", "personName", Criteria.LEFT_JOIN);
-				
-				Disjunction or = Restrictions.disjunction();
-				or.add(Restrictions.ilike("loc.name", query, mode));
-				or.add(Restrictions.ilike("encType.name", query, mode));
-				or.add(Restrictions.ilike("form.name", query, mode));
-				or.add(Restrictions.ilike("prov.name", query, mode));
-				or.add(Restrictions.ilike("prov.identifier", query, mode));
-				
-				String[] splitNames = query.split(" ");
-				Disjunction nameOr = Restrictions.disjunction();
-				for (String splitName : splitNames) {
-					nameOr.add(Restrictions.ilike("personName.givenName", splitName, mode));
-					nameOr.add(Restrictions.ilike("personName.middleName", splitName, mode));
-					nameOr.add(Restrictions.ilike("personName.familyName", splitName, mode));
-					nameOr.add(Restrictions.ilike("personName.familyName2", splitName, mode));
-				}
-				//OUTPUT for provider criteria: 
-				//prov.name like '%query%' OR prov.identifier like '%query%'
-				//OR ( personName.voided = false 
-				//		 AND (  personName.givenName like '%query%' 
-				//			OR personName.middleName like '%query%' 
-				//			OR personName.familyName like '%query%'
-				//			OR personName.familyName2 like '%query%'
-				//			)
-				//	 )
-				Conjunction personNameConjuction = Restrictions.conjunction();
-				personNameConjuction.add(Restrictions.eq("personName.voided", false));
-				personNameConjuction.add(nameOr);
-				
-				or.add(personNameConjuction);
-				
-				criteria.add(or);
-			}
+			criteria = getEncountersByPatientIdAndQuery(criteria, patientId, query);
 		} else {
-			String name = null;
-			String identifier = null;
-			if (query.matches(".*\\d+.*")) {
-				identifier = query;
-			} else {
-				// there is no number in the string, search on name
-				name = query;
-			}
-			criteria = new PatientSearchCriteria(sessionFactory, criteria).prepareCriteria(name, identifier,
-			    new ArrayList<PatientIdentifierType>(), false, orderByNames, false);
+			criteria = getEncountersByQuery(criteria, query, orderByNames);
 		}
 		
 		return criteria;
+	}
+	
+	/**
+	 * Searches for patient encounters for a particular patient id.
+	 * Filters by the query.
+	 * 
+	 * @param criteria
+	 * @param patientId
+	 * @param query
+	 * @return
+	 */
+	private Criteria getEncountersByPatientIdAndQuery(Criteria criteria, Integer patientId, String query) {
+		criteria.add(Restrictions.eq("pat.patientId", patientId));
+		if (StringUtils.isNotBlank(query)) {
+			criteria.setResultTransformer(Criteria.DISTINCT_ROOT_ENTITY);
+			//match on location.name, encounterType.name, form.name
+			//provider.name, provider.identifier, provider.person.names
+			MatchMode mode = MatchMode.ANYWHERE;
+			criteria.createAlias("enc.location", "loc");
+			criteria.createAlias("enc.encounterType", "encType");
+			criteria.createAlias("enc.form", "form");
+			criteria.createAlias("enc.encounterProviders", "enc_prov");
+			criteria.createAlias("enc_prov.provider", "prov");
+			criteria.createAlias("prov.person", "person", Criteria.LEFT_JOIN);
+			criteria.createAlias("person.names", "personName", Criteria.LEFT_JOIN);
+
+			Disjunction or = Restrictions.disjunction();
+			or.add(Restrictions.ilike("loc.name", query, mode));
+			or.add(Restrictions.ilike("encType.name", query, mode));
+			or.add(Restrictions.ilike("form.name", query, mode));
+			or.add(Restrictions.ilike("prov.name", query, mode));
+			or.add(Restrictions.ilike("prov.identifier", query, mode));
+
+			String[] splitNames = query.split(" ");
+			Disjunction nameOr = Restrictions.disjunction();
+			for (String splitName : splitNames) {
+				nameOr.add(Restrictions.ilike("personName.givenName", splitName, mode));
+				nameOr.add(Restrictions.ilike("personName.middleName", splitName, mode));
+				nameOr.add(Restrictions.ilike("personName.familyName", splitName, mode));
+				nameOr.add(Restrictions.ilike("personName.familyName2", splitName, mode));
+			}
+			//OUTPUT for provider criteria: 
+			//prov.name like '%query%' OR prov.identifier like '%query%'
+			//OR ( personName.voided = false 
+			//		 AND (  personName.givenName like '%query%' 
+			//			OR personName.middleName like '%query%' 
+			//			OR personName.familyName like '%query%'
+			//			OR personName.familyName2 like '%query%'
+			//			)
+			//	 )
+			Conjunction personNameConjuction = Restrictions.conjunction();
+			personNameConjuction.add(Restrictions.eq("personName.voided", false));
+			personNameConjuction.add(nameOr);
+
+			or.add(personNameConjuction);
+
+			criteria.add(or);
+		}
+		return criteria;
+	}
+
+	/**
+	 * Searches for patient encounters assuming the query contains either a patient identifier or a patient name.
+	 * Will search for the string assuming it could be both a patient identifier and a name.
+	 * 
+	 * @param criteria
+	 * @param query
+	 * @param orderByNames
+	 * @return
+	 */
+	private Criteria getEncountersByQuery(Criteria criteria, String query, boolean orderByNames) {
+		//As identifier could be all alpha, no heuristic here will work in determining intent of user for querying by name versus identifier
+		//So search by both!
+		String name = query;
+		String identifier = query;
+		return new PatientSearchCriteria(sessionFactory, criteria).prepareCriteria(name, identifier,
+		    new ArrayList<PatientIdentifierType>(), true, orderByNames, true);	
 	}
 	
 	/**
